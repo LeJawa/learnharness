@@ -13,8 +13,15 @@ services:
     environment:
       - NODE_ENV=production
       - LH_DATA_DIR=/app/data
+      # Keep the key store AND the subscription credential files (their
+      # directory is derived from this file's dirname) inside the writable,
+      # persisted volume. Pointing this at the image root instead makes the
+      # chatgpt/subscription stores fail on every write and the client then
+      # loops on /api/models + /api/subscriptions indefinitely.
+      - LH_AUTH_FILE=/app/data/auth.json
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      # node:*-slim ships neither wget nor curl — probe with the runtime itself.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/models').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -49,8 +49,14 @@ ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Persistent data directory (bind-mount or volume at runtime)
-RUN mkdir -p /app/data && chown learnharness:learnharness /app/data
+# Persistent data directory (bind-mount or volume at runtime).
+# /app itself must ALSO be writable: the web subscription owner derives its
+# credential directory from path.dirname(LH_AUTH_FILE), which defaults to
+# /app — an unwritable /app makes every chatgpt/subscription store write
+# fail, and those failures re-broadcast subscriptions-changed on EVERY
+# request, which the client answers by refetching /api/models +
+# /api/subscriptions forever (the observed request storm).
+RUN mkdir -p /app/data && chown learnharness:learnharness /app /app/data
 
 USER learnharness
 
