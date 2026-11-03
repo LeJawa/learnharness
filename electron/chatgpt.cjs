@@ -432,8 +432,23 @@ function createChatGPT({ store, openExternal, fetch: request = globalThis.fetch,
 			return modelValue();
 		} catch {
 			if (sequence === catalogSequence) {
+				// NOTIFY ON TRANSITION, NEVER PER CALL (deployment incident, 2026-11-03):
+				// every notify() reaches open windows as `subscriptions-changed`, and a
+				// browser consumer answers it by refetching /api/subscriptions AND
+				// /api/models (settings-signal "keys"). This route is itself on that
+				// refetch path, so an unconditional notify() here made a PERSISTENT
+				// failure (an unwritable credential store, e.g. a container whose
+				// AUTH_FILE directory is not writable) re-trigger the catalog fetch
+				// forever: a self-sustaining loop at network speed that never lets the
+				// picker leave its loading state. A failure state is news exactly once
+				// — when it differs from what this process already published — so
+				// repeated identical failures stay silent. Catalog clearing and a
+				// CHANGED error (recovery-worthy transitions) still notify.
+				const failure = publicError(fail("catalog"));
+				const changed = catalog.length > 0 || catalogError !== failure;
 				if (catalog.length) { catalog = []; authorityRevision++; }
-				catalogError = publicError(fail("catalog")); notify();
+				catalogError = failure;
+				if (changed) notify();
 			}
 			return modelValue();
 		}
