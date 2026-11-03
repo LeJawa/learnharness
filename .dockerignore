@@ -1,0 +1,40 @@
+# Secrets & dev data (belt-and-braces alongside next.config.ts excludes)
+data/
+auth.json
+.env
+.env.local
+.env.*.local
+*.credentials.json
+
+# Git
+.git
+.gitignore
+
+# Node
+node_modules
+.next
+dist
+
+# Editor / IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs & tests (not needed in production)
+docs/
+tests/
+scripts/
+
+# Electron desktop build stuff (server doesn't need these)
+electron/
+electron-builder.yml
+*.desktop
+
+# Dev tooling
+*.log
+npm-debug.log*

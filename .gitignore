@@ -4,6 +4,7 @@ data/
 *.log
 .DS_Store
 *.tsbuildinfo
+.env
 .env.local
 .memory/
 SCOPE.md
