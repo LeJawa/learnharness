@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { JetBrains_Mono, Source_Sans_3 } from "next/font/google";
 import "katex/dist/katex.min.css";
 import "./globals.css";
@@ -16,6 +16,21 @@ const prose = Source_Sans_3({ subsets: ["latin"], variable: "--font-sans3" });
 export const metadata: Metadata = {
 	title: "Learning Harness",
 	description: "A teacher agent with a memory — sessions, quizzes, and a knowledge graph of what you know.",
+};
+
+/** Phone pass (2026-11): the viewport export is what makes safe areas real.
+ *  `viewportFit: cover` lets the app paint under the notch/home indicator
+ *  (app/globals.css exposes env() insets as --lh-safe-*);
+ *  `interactiveWidget: resizes-content` makes the layout shrink with the
+ *  on-screen keyboard instead of sliding the composer underneath it
+ *  (Firefox Android / Chromium). Pinch-zoom stays ENABLED — never set
+ *  maximumScale here. */
+export const viewport: Viewport = {
+	width: "device-width",
+	initialScale: 1,
+	viewportFit: "cover",
+	themeColor: "#141414",
+	interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

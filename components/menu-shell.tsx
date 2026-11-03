@@ -69,13 +69,20 @@ export interface MenuPlacement {
  *  filter re-measure honestly) → side, fixed style, cap. Flip rule: stay
  *  on the preferred side unless it cannot show the full content AND the
  *  other side is roomier. The cap always keeps the menu inside its side's
- *  room when there is room; the floor keeps it usable when there isn't. */
+ *  room when there is room; the floor keeps it usable when there isn't.
+ *
+ *  Width (phone pass 2026-11): every menu also gets a viewport cap, and a
+ *  LEFT-aligned menu's left edge is clamped against its measured width —
+ *  a 22rem menu anchored mid-screen used to hang off a phone's right edge.
+ *  `contentWidth` is 0 on the hidden first pass (nothing measured yet):
+ *  right-aligned menus need no clamp, and the cap alone still applies. */
 export function computeMenuPlacement(
 	rect: { top: number; bottom: number; left: number; right: number },
 	viewport: { width: number; height: number },
 	contentHeight: number,
 	preferredSide: MenuSide,
 	align: MenuAlign,
+	contentWidth = 0,
 ): MenuPlacement {
 	const availDown = viewport.height - EDGE - (rect.bottom + GAP);
 	const availUp = rect.top - GAP - EDGE;
@@ -91,11 +98,20 @@ export function computeMenuPlacement(
 	}
 	const avail = side === "down" ? availDown : availUp;
 	const maxHeight = Math.max(MIN_USABLE, Math.min(CAP_VH * viewport.height, avail));
+	const maxWidth = Math.max(MIN_USABLE, viewport.width - EDGE * 2);
+	const width = contentWidth > 0 ? Math.min(contentWidth, maxWidth) : 0;
 	const horizontal: Record<string, number> =
-		align === "right" ? { right: viewport.width - rect.right } : { left: rect.left };
+		align === "right"
+			? { right: Math.max(EDGE, viewport.width - rect.right) }
+			: {
+					left:
+						width > 0
+							? Math.max(EDGE, Math.min(rect.left, viewport.width - EDGE - width))
+							: rect.left,
+				};
 	const vertical: Record<string, number> =
 		side === "down" ? { top: rect.bottom + GAP } : { bottom: viewport.height - rect.top + GAP };
-	return { side, style: { ...horizontal, ...vertical }, maxHeight };
+	return { side, style: { ...horizontal, ...vertical, maxWidth }, maxHeight };
 }
 
 /** The shared shell. Exactly one anchor seam: pass `anchorRef` (a live
@@ -204,6 +220,7 @@ export function MenuShell({
 				menuRef.current.scrollHeight,
 				preferredSide,
 				align,
+				menuRef.current.getBoundingClientRect().width,
 			);
 			setPlaced(p);
 		};

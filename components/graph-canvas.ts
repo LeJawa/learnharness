@@ -55,6 +55,7 @@ import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from "d3-zoom";
 import type { Simulation, SimulationLinkDatum } from "d3-force";
 import { clusterHue, type Pt } from "./cluster-geometry.ts";
+import { createLongPress } from "./long-press.ts";
 import {
 	CHARGE_STRENGTH,
 	CLUSTER_PULL_STRENGTH,
@@ -597,6 +598,18 @@ export class GraphCanvasRenderer {
 	private simActive = false;
 	private dragId: string | null = null;
 	private dragOrigin: Pt | null = null;
+
+	/** Touch has no right-click (phone pass 2026-11): a stationary press on a
+	 *  node opens the SAME menu the desktop's right-click opens. Watching
+	 *  starts on the pointerdown below; movement (pan/pinch) cancels it. */
+	private longPress = createLongPress((point) => {
+		// The press is a menu gesture, never a drag or a click: release a
+		// pinned node and swallow the pointerup path (menu owns the gesture).
+		this.cancelPressGesture();
+		const pos = this.eventPos(point);
+		const node = this.pickAt(pos.x, pos.y);
+		if (node) this.callbacks.onContext(node.id, pos);
+	});
 	private simMoved = false; // any real movement since the last commit
 	private commitTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -691,6 +704,7 @@ export class GraphCanvasRenderer {
 		canvas.addEventListener("pointermove", this.onPointerMove);
 		canvas.addEventListener("pointerdown", this.onPointerDown);
 		canvas.addEventListener("pointerup", this.onPointerUp);
+		canvas.addEventListener("pointercancel", this.onPointerCancel);
 		canvas.addEventListener("pointerleave", this.onPointerLeave);
 		// Right-click → the caller's context menu (node interlude). Always
 		// preventDefault: the native menu on a full-bleed custom canvas is
@@ -905,6 +919,7 @@ export class GraphCanvasRenderer {
 		this.canvas.removeEventListener("pointermove", this.onPointerMove);
 		this.canvas.removeEventListener("pointerdown", this.onPointerDown);
 		this.canvas.removeEventListener("pointerup", this.onPointerUp);
+		this.canvas.removeEventListener("pointercancel", this.onPointerCancel);
 		this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
 		this.canvas.removeEventListener("contextmenu", this.onContextMenu);
 		this.canvas.style.cursor = "";
@@ -928,6 +943,7 @@ export class GraphCanvasRenderer {
 	};
 
 	private onPointerMove = (e: PointerEvent) => {
+		this.longPress.move(e);
 		const pos = this.eventPos(e);
 		if (this.dragId) {
 			const n = this.simById.get(this.dragId);
@@ -962,6 +978,7 @@ export class GraphCanvasRenderer {
 		// the right-pointerup must never read as a click (the detail card
 		// used to open under the menu).
 		if (e.button !== 0) return;
+		this.longPress.down(e);
 		const pos = this.eventPos(e);
 		const node = this.pickAt(pos.x, pos.y);
 		if (node && this.sim) {
@@ -993,6 +1010,9 @@ export class GraphCanvasRenderer {
 
 	private onPointerUp = (e: PointerEvent) => {
 		if (e.button !== 0) return; // right-click is context-menu territory
+		// A fired long press already opened the menu and cleared the press
+		// state: the compatibility click must not also select the node.
+		if (this.longPress.up()) return;
 		// Node press ending: click (no slop) → select; drag → release-and-relax.
 		if (this.dragId) {
 			const id = this.dragId;
@@ -1040,10 +1060,32 @@ export class GraphCanvasRenderer {
 	};
 
 	private onPointerLeave = () => {
+		this.longPress.cancel();
 		if (this.dragId) return; // pointer capture keeps the drag alive
 		this.downPos = null;
 		this.setHover(null);
 	};
+
+	private onPointerCancel = () => {
+		this.longPress.cancel();
+	};
+
+	/** End a press that became a menu gesture: unpin a held node and drop
+	 *  the click bookkeeping, so the pointerup cannot select under the menu. */
+	private cancelPressGesture() {
+		this.downPos = null;
+		if (!this.dragId) return;
+		const n = this.simById.get(this.dragId);
+		if (n) {
+			n.fx = null;
+			n.fy = null;
+		}
+		this.dragId = null;
+		this.dragOrigin = null;
+		this.sim?.alphaTarget(0);
+		this.canvas.style.cursor = "";
+		this.markDirty();
+	}
 
 	// ── Internals ──
 

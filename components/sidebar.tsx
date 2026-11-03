@@ -24,34 +24,34 @@ import { kbdEventForAction } from "@/src/core";
 import { notifySettingsSaved } from "@/components/settings-signal";
 
 /**
- * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
- * sits inline next to the content and can stay open while working in a
- * session. Open state persists across pages (provider lives in the root
- * layout) and across reloads (localStorage).
+ * Toggleable left pane. WIDE (>= SIDEBAR_INLINE_MIN): an inline column next
+ * to the content that can stay open while working in a session — the
+ * original behavior, unchanged, and the only place the open/closed
+ * preference is persisted. NARROW: an OVERLAY DRAWER — it slides over the
+ * content with a scrim, closes on tap-outside / Esc / navigation, and holds
+ * focus while open (owner decision, phone pass 2026-11: a 288px inline
+ * column beside ~100px of content is not a layout, and the old narrow
+ * behavior was Electron-only, so a phone browser had none at all).
+ *
+ * The mode rule and the "which state owns the pane" rule are pure and live
+ * in components/sidebar-mode.ts; this file owns the mechanics. Open state
+ * persists across pages (provider lives in the root layout) and across
+ * reloads (localStorage) — WIDE only; the drawer is transient.
  */
 
 const STORAGE_KEY = "lh:sidebar-open";
 
-/*
- * Narrow-window behavior (owner, 2026-09-17): below SIDEBAR_AUTOCLOSE the
- * sidebar would squeeze the page below the 640px window floor (the two
- * numbers compose: 640 + 288 sidebar = 928), so it auto-closes — and
- * auto-RESTORES when the window widens again (owner choice: the sidebar
- * pops back, not a manual re-open). The whole behavior is one expression:
- * rendered = pref && !narrow, where pref is the persisted user choice.
- * Manual closes persist and stay closed; auto-close does not touch the
- * preference. Opening the sidebar while narrow asks the Electron shell to
- * widen the window to the threshold (window.lh.expandWindow, IPC in
- * electron/main.cjs) — the resize listener flips `narrow` and the sidebar
- * appears. In the plain browser there is no window to widen and no
- * suppression — a narrow tab opens the sidebar if the user says so.
- *
- * Mirrors SIDEBAR_AUTOCLOSE in electron/main.cjs — keep in sync.
- */
 import type { ChatGPTControlBridge, NativeSubscriptionControlBridge } from "@/src/core";
 import type { UpdateState } from "@/components/settings/update-settings.tsx";
 import { FilePathDropZone } from "@/components/file-path-drop-zone";
-const SIDEBAR_AUTOCLOSE = 928;
+import { useBackdropDismiss } from "@/components/backdrop-dismiss";
+import { createLongPress } from "@/components/long-press";
+import {
+	NARROW_MEDIA_QUERY,
+	sidebarModeForNarrow,
+	sidebarRendersOpen,
+	type SidebarMode,
+} from "@/components/sidebar-mode";
 
 // Module scope, guarded for SSR (the server has no navigator).
 const IS_ELECTRON = typeof navigator !== "undefined" && navigator.userAgent.includes("Electron");
@@ -69,6 +69,9 @@ declare global {
 			openSubscriptionBrowser?: (action: string) => Promise<void>;
 			chatgpt?: ChatGPTControlBridge;
 			subscriptions?: NativeSubscriptionControlBridge;
+			/** Kept in the preload bridge for the Electron shell's own window
+			 *  floor (electron/main.cjs); the pane no longer calls it — narrow
+			 *  windows get a drawer instead of a resize request. */
 			expandWindow: () => void;
 			/** The zoom truth (owner round 7): subscribes to "lh:zoom" pushes; returns unsubscribe. */
 			onZoom?: (cb: (factor: number) => void) => () => void;
@@ -84,9 +87,20 @@ declare global {
 	}
 }
 
-const SidebarContext = createContext<{ open: boolean; toggle: () => void }>({
+const SidebarContext = createContext<{
+	/** The pane is rendered open in the CURRENT mode (drawer flag when
+	 *  narrow, persisted preference when wide). */
+	open: boolean;
+	/** The pane is a drawer (narrow) rather than the inline column. */
+	drawer: boolean;
+	toggle: () => void;
+	/** Close the drawer (no-op conceptually when inline). */
+	close: () => void;
+}>({
 	open: false,
+	drawer: false,
 	toggle: () => {},
+	close: () => {},
 });
 
 export function useSidebar() {
@@ -102,10 +116,18 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		return off;
 	}, []);
 	// Start closed so server and client first-render agree (no hydration
-	// mismatch); the stored value is applied after mount.
-	const [open, setOpen] = useState(false);
-	const [narrow, setNarrow] = useState(false);
+	// mismatch); the stored value / viewport mode are applied after mount.
+	//
+	// TWO OWNERS, never conflated (components/sidebar-mode.ts):
+	//  - pref       the persisted WIDE choice (localStorage)
+	//  - drawerOpen the transient NARROW flag — never persisted, and reset
+	//               closed whenever the viewport enters narrow, so a phone
+	//               never inherits the desktop's "open".
+	const [pref, setPref] = useState(false);
+	const [drawerOpen, setDrawerOpen] = useState(false);
+	const [mode, setMode] = useState<SidebarMode>("inline");
 	const [mounted, setMounted] = useState(false);
+	const open = sidebarRendersOpen(mode, pref, drawerOpen);
 
 	useEffect(() => {
 		// Electron shell detection (merged chrome, 2026-09-17): keys the
@@ -129,41 +151,57 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 		void window.lh?.getZoom?.().then(setZoomVar);
 
 		const stored = localStorage.getItem(STORAGE_KEY);
-		// Default: open (first run introduces the sidebar).
-		setOpen(stored === null ? true : stored === "1");
-		setMounted(true);
-		return () => off?.();
-	}, []);
+		// Default: open (first run introduces the sidebar); WIDE only.
+		setPref(stored === null ? true : stored === "1");
 
-	// Narrow-window auto-close/auto-restore (see SIDEBAR_AUTOCLOSE note):
-	// fires only on actual resizes — a boolean compare, no layout work.
-	// Both this and the mount effect land before the first paint, so a
-	// narrow window never flashes the open sidebar on load.
-	useEffect(() => {
-		if (!IS_ELECTRON) return; // plain-browser tabs open freely
-		const onResize = () => setNarrow(window.innerWidth < SIDEBAR_AUTOCLOSE);
-		onResize();
-		window.addEventListener("resize", onResize);
-		return () => window.removeEventListener("resize", onResize);
+		// ONE narrow rule for every host (sidebar-mode.ts): matchMedia, not a
+		// resize handler — it also fires on rotation and zoom, and the query
+		// is shared with the pure width comparison the tests pin. Entering
+		// narrow always lands CLOSED; the preference is never touched, so
+		// widening the window restores the wide layout exactly as the user
+		// left it. Lands before the first paint (same effect as above).
+		const media =
+			typeof window.matchMedia === "function" ? window.matchMedia(NARROW_MEDIA_QUERY) : null;
+		const syncMode = () => {
+			const next = sidebarModeForNarrow(media?.matches ?? false);
+			setMode(next);
+			if (next === "drawer") setDrawerOpen(false);
+		};
+		syncMode();
+		media?.addEventListener("change", syncMode);
+		setMounted(true);
+		return () => {
+			off?.();
+			media?.removeEventListener("change", syncMode);
+		};
 	}, []);
 
 	const toggle = useCallback(() => {
-		// Opening while narrow (auto-closed, or the user's own closed-at-
-		// narrow): ask the shell to widen to the threshold — the resize
-		// listener flips `narrow` and the sidebar appears. The preference
-		// persists like any other open, so a restart at a narrow width
-		// still auto-restores when widened.
-		if (narrow && !open) {
-			localStorage.setItem(STORAGE_KEY, "0");
-			setOpen(true);
-			window.lh?.expandWindow();
+		// Narrow: the drawer is transient — never written to the preference.
+		if (mode === "drawer") {
+			setDrawerOpen((v) => !v);
 			return;
 		}
-		setOpen((v) => {
+		setPref((v) => {
 			localStorage.setItem(STORAGE_KEY, v ? "0" : "1");
 			return !v;
 		});
-	}, [narrow, open]);
+	}, [mode]);
+
+	const close = useCallback(() => setDrawerOpen(false), []);
+
+	// Esc closes the modal drawer and CLAIMS the key: the window's Esc chain
+	// (dictation / abort turn) belongs to the content the drawer covers.
+	useEffect(() => {
+		if (mode !== "drawer" || !drawerOpen) return;
+		const onKeyDown = (e: KeyboardEvent) => {
+			if (e.key !== "Escape") return;
+			e.stopPropagation();
+			setDrawerOpen(false);
+		};
+		document.addEventListener("keydown", onKeyDown, true);
+		return () => document.removeEventListener("keydown", onKeyDown, true);
+	}, [mode, drawerOpen]);
 
 	// ⌘B: the global shortcut dispatches kbdEventForAction("toggle-sidebar")
 	// and the context answers on exactly that name — the shared spelling
@@ -179,9 +217,19 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, [toggle]);
 
 	return (
-		<SidebarContext.Provider value={{ open: open && !narrow, toggle }}>
+		<SidebarContext.Provider
+			value={{ open, drawer: mode === "drawer", toggle, close }}
+		>
 			{/* transitions gated on mount: no slide-in flash on page load */}
-			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
+			<div
+				className={cn(
+					"flex h-dvh",
+					mounted &&
+						"[&_.sidebar-motion]:transition-[width,margin,opacity,transform]",
+				)}
+			>
+				{children}
+			</div>
 		</SidebarContext.Provider>
 	);
 }
@@ -291,6 +339,7 @@ export function SessionRow({
 	onOpen,
 	kbdSelected = false,
 	onContextMenu,
+	onLongPress,
 }: {
 	chat: ChatListItem;
 	active: boolean;
@@ -300,15 +349,53 @@ export function SessionRow({
 	kbdSelected?: boolean;
 	/** Right-click opens the context menu (wave 6: Rename / Delete). */
 	onContextMenu?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+	/** Long-press (touch/pen) opens the SAME context menu right-click opens
+	 *  on desktop — owner decision, phone pass 2026-11: touch has no
+	 *  right-click, so Rename / Delete / Export / coverage were unreachable
+	 *  on a phone. The anchor rides back so the caller can position the
+	 *  menu on the row. */
+	onLongPress?: (anchor: HTMLButtonElement) => void;
 }) {
+	const rowRef = useRef<HTMLButtonElement | null>(null);
+	const pressRef = useRef<ReturnType<typeof createLongPress> | null>(null);
+	const suppressClickRef = useRef(false);
+	// The gesture object outlives renders; the handler does not — keep the
+	// current one behind a ref instead of rebuilding the recognizer.
+	const longPressHandler = useRef(onLongPress);
+	longPressHandler.current = onLongPress;
+	const press = () => {
+		pressRef.current ??= createLongPress(() => {
+			if (rowRef.current) longPressHandler.current?.(rowRef.current);
+		});
+		return pressRef.current;
+	};
+	// A row can leave the list mid-press (navigation, delete): the pending
+	// timer must die with it.
+	useEffect(() => () => pressRef.current?.cancel(), []);
 	return (
 		<button
+			ref={rowRef}
 			type="button"
-			onClick={onOpen}
+			onClick={() => {
+				// The press already opened the menu — the compatibility click
+				// that follows must not also navigate.
+				if (suppressClickRef.current) {
+					suppressClickRef.current = false;
+					return;
+				}
+				onOpen();
+			}}
 			onContextMenu={onContextMenu}
+			onPointerDown={(e) => press().down(e)}
+			onPointerMove={(e) => pressRef.current?.move(e)}
+			onPointerUp={() => {
+				if (pressRef.current?.up()) suppressClickRef.current = true;
+			}}
+			onPointerCancel={() => pressRef.current?.cancel()}
+			onPointerLeave={() => pressRef.current?.cancel()}
 			data-testid={kbdSelected ? "session-row-kbd" : "session-row"}
 			className={cn(
-				"relative mb-0.5 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent",
+				"relative mb-0.5 flex w-full select-none items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-accent coarse:min-h-11 coarse:py-2.5",
 				active && "bg-accent",
 				kbdSelected && !active && "bg-accent/60 ring-1 ring-border",
 			)}
@@ -389,8 +476,69 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 export type SessionKindFilter = "teach" | "all" | "practice";
 const KIND_FILTER_KEY = "lh:session-kind-filter";
 
+/**
+ * The pane's frame (phone pass 2026-11): the inline column when wide, the
+ * overlay drawer when narrow. Presentational and SSR-safe on purpose — the
+ * render tests pin both geometries (dialog role + scrim, closed-state
+ * aria-hidden/inert, and the untouched wide markup).
+ */
+export function SidebarPane({
+	drawer,
+	open,
+	onClose,
+	children,
+}: {
+	drawer: boolean;
+	open: boolean;
+	/** Scrim press — the drawer's modal boundary. */
+	onClose: () => void;
+	children: React.ReactNode;
+}) {
+	// One press-and-release gesture on the scrim closes; a drag that started
+	// inside the drawer never closes it on release.
+	const backdrop = useBackdropDismiss(onClose);
+	return (
+		<>
+			{drawer && open && (
+				<div
+					data-testid="sidebar-scrim"
+					aria-hidden="true"
+					className="fixed inset-0 z-[45] bg-background/80"
+					{...backdrop}
+				/>
+			)}
+			<aside
+				role={drawer ? "dialog" : undefined}
+				aria-modal={drawer ? true : undefined}
+				aria-label={drawer ? "Sessions" : undefined}
+				aria-hidden={!open}
+				inert={drawer && !open ? true : undefined}
+				data-testid={drawer ? "sidebar-drawer" : "sidebar"}
+				className={cn(
+					"sidebar-motion overflow-hidden",
+					drawer
+						? cn(
+								"fixed inset-y-0 left-0 z-50 w-[min(18rem,85vw)] bg-background shadow-2xl duration-200",
+								open ? "translate-x-0" : "-translate-x-full",
+							)
+						: cn("shrink-0 duration-200", open ? "w-72" : "w-0"),
+				)}
+			>
+				<div
+					className={cn(
+						"flex h-full flex-col border-r bg-background",
+						drawer ? "w-full pt-[var(--lh-safe-top)]" : "w-72",
+					)}
+				>
+					{children}
+				</div>
+			</aside>
+		</>
+	);
+}
+
 function SessionsSidebar() {
-	const { open, toggle } = useSidebar();
+	const { open, drawer, toggle, close } = useSidebar();
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
 	const [query, setQuery] = useState("");
 	const [kindFilter, setKindFilter] = useState<SessionKindFilter>("all");
@@ -406,13 +554,45 @@ function SessionsSidebar() {
 	const router = useRouter();
 	const { open: openSettings } = useSettingsDialog();
 
+	/* ── Narrow drawer mechanics (phone pass 2026-11) ──
+	 * The pane below SIDEBAR_INLINE_MIN is MODAL: it covers the content it
+	 * used to sit beside, so it owns focus while open and gives it back on
+	 * close. Wide keeps the original non-modal inline pane, untouched. */
+	const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+	const restoreFocusRef = useRef<HTMLElement | null>(null);
+
+	useEffect(() => {
+		if (!drawer) return;
+		if (open) {
+			// Focus the CLOSE button, not the search field: on a phone the
+			// search would pop the keyboard over the list the user just opened.
+			const active = document.activeElement;
+			restoreFocusRef.current = active instanceof HTMLElement ? active : null;
+			closeButtonRef.current?.focus({ preventScroll: true });
+			return;
+		}
+		const target = restoreFocusRef.current;
+		restoreFocusRef.current = null;
+		target?.focus({ preventScroll: true });
+	}, [drawer, open]);
+
+	// Navigation closes the drawer: a row tap IS a navigation, and the drawer
+	// belongs to the view it was opened from.
+	const lastPathRef = useRef(pathname);
+	useEffect(() => {
+		if (lastPathRef.current === pathname) return;
+		lastPathRef.current = pathname;
+		close();
+	}, [pathname, close]);
+
 	/* New session (owner, 2026-09-13): NO POST — the button opens the
 	   sessionless draft view; the session is created only when the first
 	   message is sent (and that message becomes its title). Search: a
 	   client-side filter over the poll snapshot — no server round trip. */
 	const newSession = useCallback(() => {
+		close(); // a narrow drawer belongs to the view it was opened from
 		router.push("/chat/new");
-	}, [router]);
+	}, [router, close]);
 
 	/* FUZZY (owner round 8, 2026-10-05): subsequence match ranked by
 	 * fuzzyScore — prefix beats word-boundary beats scattered. Empty query
@@ -646,11 +826,7 @@ function SessionsSidebar() {
 	}, [open, pathname, refresh]);
 
 	return (
-		<aside
-			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "w-72" : "w-0")}
-			aria-hidden={!open}
-		>
-			<div className="flex h-full w-72 flex-col border-r bg-background">
+		<SidebarPane drawer={drawer} open={open} onClose={close}>
 				{/* LH wordmark — the owner's header; close toggle sits at the edge.
 				    Merged chrome (2026-09-17): in Electron this band is the
 				    window's drag surface and starts after the traffic lights
@@ -681,11 +857,12 @@ function SessionsSidebar() {
 					</Hint>
 					<Hint label="Close sidebar" action="toggle-sidebar">
 						<Button
+							ref={closeButtonRef}
 							variant="ghost"
 							size="icon"
 							aria-label="Close sidebar"
 							onClick={toggle}
-							className="lh-no-drag"
+							className="lh-no-drag coarse:size-10"
 						>
 							<PanelLeftCloseIcon className="size-4" />
 						</Button>
@@ -701,7 +878,7 @@ function SessionsSidebar() {
 						type="button"
 						data-testid="new-session"
 						onClick={() => void newSession()}
-						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:min-h-10"
 					>
 						<PlusIcon className="size-3" />
 						Teaching
@@ -710,8 +887,11 @@ function SessionsSidebar() {
 					<button
 						type="button"
 						data-testid="new-session-practice"
-						onClick={() => router.push("/chat/new?mode=practice")}
-						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						onClick={() => {
+							close();
+							router.push("/chat/new?mode=practice");
+						}}
+						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:min-h-10"
 					>
 						<DumbbellIcon className="size-3" />
 						Practice
@@ -773,7 +953,7 @@ function SessionsSidebar() {
 							}}
 							placeholder="Search…"
 							aria-label="Search sessions"
-							className="h-6 rounded-sm border-border bg-background pl-6 text-xs placeholder:text-muted-foreground/60"
+							className="h-6 rounded-sm border-border bg-background pl-6 text-xs placeholder:text-muted-foreground/60 coarse:h-9"
 						/>
 						<SearchIcon className="pointer-events-none absolute left-1.5 top-1/2 size-3 -translate-y-1/2 text-muted-foreground/70" />
 					</span>
@@ -795,7 +975,7 @@ function SessionsSidebar() {
 							data-testid={`kind-filter-${f}`}
 							onClick={() => setFilter(f)}
 							className={cn(
-								"flex-1 rounded-sm px-2 py-1 text-[11px] uppercase tracking-wider transition-colors",
+								"flex-1 rounded-sm px-2 py-1 text-[11px] uppercase tracking-wider transition-colors coarse:min-h-9 coarse:py-2",
 								kindFilter === f
 									? "bg-accent text-foreground"
 									: "text-muted-foreground hover:text-foreground",
@@ -833,6 +1013,12 @@ function SessionsSidebar() {
 										router.push(`/chat/${c.id}`);
 									}}
 									onContextMenu={(e) => openContext(e, c)}
+									onLongPress={(anchor) => {
+										// The same menu right-click opens: the drawer's row actions
+										// were unreachable on touch until this gesture.
+										ctxAnchorRef.current = anchor;
+										setCtxChatId(c.id);
+									}}
 								/>
 							),
 						)
@@ -849,20 +1035,22 @@ function SessionsSidebar() {
 					{/* Settings entry (settings-app wave): same row language as
 					    New session — quiet, bottom-pinned, opens the centered
 					    dialog (also mod+, in the keyboard registry). */}
-					<div className="px-3 pb-3 pt-1">
+					<div className="px-3 pb-[calc(0.75rem+var(--lh-safe-bottom))] pt-1">
 						<Hint label="Settings" action="open-settings" side="right">
 							<button
 								type="button"
-								onClick={() => openSettings()}
+								onClick={() => {
+									close(); // the modal drawer must not sit under the dialog
+									openSettings();
+								}}
 								data-testid="settings-entry"
-								className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+								className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground coarse:min-h-10"
 							>
 								<SettingsIcon className="size-3" />
 								Settings
 							</button>
 						</Hint>
 					</div>
-				</div>
 
 				{/* The context menu (wave 6 + the extraction-UX redesign): the
 				    coverage block above, then exactly two management actions
@@ -888,7 +1076,7 @@ function SessionsSidebar() {
 								setRenamingId(ctxChatId);
 								setCtxChatId(null);
 							}}
-							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-foreground transition-colors hover:bg-accent"
+							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-foreground transition-colors hover:bg-accent coarse:min-h-11"
 						>
 							Rename
 						</button>
@@ -910,7 +1098,7 @@ function SessionsSidebar() {
 								a.click();
 								a.remove();
 							}}
-							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-foreground transition-colors hover:bg-accent"
+							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-foreground transition-colors hover:bg-accent coarse:min-h-11"
 						>
 							Export as Markdown…
 						</button>
@@ -922,7 +1110,7 @@ function SessionsSidebar() {
 								if (target) setDeleting(target);
 								setCtxChatId(null);
 							}}
-							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-muted-foreground/80 transition-colors hover:bg-accent hover:text-foreground"
+							className="flex items-center rounded-lg px-2.5 py-1.5 text-left text-muted-foreground/80 transition-colors hover:bg-accent hover:text-foreground coarse:min-h-11"
 						>
 							Delete…
 						</button>
@@ -938,16 +1126,24 @@ function SessionsSidebar() {
 					onClose={() => setDeleting(null)}
 					onDeleted={onDeleted}
 				/>
-			</aside>
+			</SidebarPane>
 	);
 }
 
 /** The app frame: sidebar inline + content. Rendered once in the root layout. */
 export function AppShell({ children }: { children: React.ReactNode }) {
+	const { open, drawer } = useSidebar();
 	return (
 		<SettingsDialogProvider>
 			<SessionsSidebar />
-			<FilePathDropZone className="relative min-w-0 flex-1">{children}</FilePathDropZone>
+			{/* The content is INERT while the modal drawer covers it: no stray
+			    tab stops behind the scrim, no interaction through it. */}
+			<FilePathDropZone
+				className="relative min-w-0 flex-1"
+				inert={drawer && open}
+			>
+				{children}
+			</FilePathDropZone>
 			{/* The single document-level keydown listener (keyboard wave A) —
 			    after the content in the tree, but it's window-level so order only
 			    matters for the events it dispatches, never for DOM priority. */}

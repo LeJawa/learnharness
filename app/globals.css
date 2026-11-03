@@ -2,6 +2,12 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Touch layout switches (phone pass 2026-11). `coarse:` marks the controls
+   whose hit area grows only on touch devices — the desktop's tuned
+   geometry stays pixel-identical, since a coarse pointer cannot hover and
+   needs the platform's 44px press area. Use it for size/padding only. */
+@custom-variant coarse (@media (pointer: coarse));
+
 /*
  * THE SKIN — wave 5. Design tokens, the single place to restyle the app.
  *
@@ -65,6 +71,14 @@
 	--lh-prose-leading: 1.5;
 	/* Markdown heading weight (appearance settings; 900 = the Black cut). */
 	--lh-heading-weight: 900;
+	/* Safe-area insets (phone pass 2026-11): active only under
+	   viewport-fit=cover (app/layout.tsx's viewport export). A browser
+	   without insets resolves 0px, so desktop/Electron layouts are
+	   untouched. Consumed by the top bars, the drawer, and the docks. */
+	--lh-safe-top: env(safe-area-inset-top, 0px);
+	--lh-safe-right: env(safe-area-inset-right, 0px);
+	--lh-safe-bottom: env(safe-area-inset-bottom, 0px);
+	--lh-safe-left: env(safe-area-inset-left, 0px);
 }
 
 /* The app is always dark (<html class="dark">); mirror the same values so
@@ -177,6 +191,18 @@
 
 * {
 	border-color: var(--color-border);
+}
+
+/* Touch chrome (phone pass 2026-11): buttons respond to the first tap
+   (no double-tap-zoom delay) and long-pressing a control opens the app's
+   own menu instead of starting a text selection. The graph canvas is
+   deliberately NOT included — it keeps d3's pinch/pan gestures. */
+@media (pointer: coarse) {
+	button,
+	[role="button"] {
+		touch-action: manipulation;
+		user-select: none;
+	}
 }
 
 body {

@@ -133,7 +133,12 @@ describe("ChainTableBody — THE shared TopBar + the lines law (owner, round 2)"
 		const html = render();
 		assert.ok(html.includes("lh-drag"), "the window-drag band");
 		assert.ok(html.includes("select-none"), "dragging never highlights the bar");
-		assert.ok(html.includes("h-15"), "the standard height");
+		// The band is still 60px of content; it now GROWS by the safe-area top
+		// inset on devices with a display cutout (phone pass 2026-11).
+		assert.ok(
+			html.includes("h-[calc(3.75rem+var(--lh-safe-top))]"),
+			"the standard height (60px + safe-area inset)",
+		);
 		assert.ok(!html.includes(">Chains<"), "NO title (owner round 11): the serif register always names a session");
 		assert.ok(html.includes("chain"), "the counts remain");
 		assert.ok(html.includes('data-testid="chain-table-close"'), "the close X");

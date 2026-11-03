@@ -11,6 +11,9 @@
  *
  * Mechanics baked in (the chat-session bar's proven pattern):
  * - h-15 (60px) — matches the sidebar's wordmark band, one border line.
+ *   On devices with a display cutout the band keeps its 60px of content
+ *   and grows by the safe-area inset (--lh-safe-top), so the traffic-light
+ *   / notch gutter never eats a control (phone pass 2026-11).
  * - lh-drag — the window-drag band. NATIVE interactive children
  *   (button/input/a/…) carve out AUTOMATICALLY via the globals.css auto
  *   carve-out rule (owner standardization ruling, 2026-09-29 night) —
@@ -53,7 +56,7 @@ export function TopBar({
 	return (
 		<header
 			onMouseDown={onMouseDown}
-			className={`${drag ? "lh-drag " : ""}lh-wco-gutter flex h-15 select-none items-center gap-3 border-b border-border px-3`}
+			className={`${drag ? "lh-drag " : ""}lh-wco-gutter flex h-[calc(3.75rem+var(--lh-safe-top))] select-none items-center gap-3 border-b border-border px-3 pt-[var(--lh-safe-top)] max-md:gap-2`}
 		>
 			<SidebarToggle />
 			{children}

@@ -80,3 +80,29 @@ describe("computeMenuPlacement — cap + position", () => {
 		assert.ok(!("right" in p.style));
 	});
 });
+describe("computeMenuPlacement — phone width (2026-11)", () => {
+	const phone = { width: 390, height: 844 };
+
+	it("every menu is capped to the viewport (edge to edge minus the 8px gutters)", () => {
+		const p = computeMenuPlacement({ top: 100, bottom: 140, left: 300, right: 380 }, phone, 300, "down", "right", 352);
+		assert.equal(p.style.maxWidth, 390 - 16);
+	});
+
+	it("a right-aligned menu stays inside the right edge", () => {
+		const p = computeMenuPlacement({ top: 100, bottom: 140, left: 300, right: 380 }, phone, 300, "down", "right", 352);
+		assert.equal(p.style.right, 10);
+		// 390 − 10 − min(352, 374) = 28 → on screen.
+		assert.ok((p.style.right as number) + Math.min(352, 374) <= 390);
+	});
+
+	it("a LEFT-aligned menu is clamped against its measured width", () => {
+		// Anchored mid-screen: 200 + 374 would hang 184px past the edge.
+		const p = computeMenuPlacement({ top: 100, bottom: 140, left: 200, right: 300 }, phone, 300, "down", "left", 352);
+		assert.equal(p.style.left, 390 - 8 - 352);
+	});
+
+	it("left alignment is untouched when it already fits (desktop)", () => {
+		const p = computeMenuPlacement({ top: 100, bottom: 140, left: 100, right: 300 }, { width: 1280, height: 800 }, 300, "down", "left", 352);
+		assert.equal(p.style.left, 100);
+	});
+});

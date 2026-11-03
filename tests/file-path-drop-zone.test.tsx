@@ -228,6 +228,8 @@ test("nested enter/leave depth keeps the drop overlay until the zone is left; no
 test("production AppShell places the sidebar outside its content-only drop zone", () => {
 	const source = readFileSync(new URL("../components/sidebar.tsx", import.meta.url), "utf8");
 	const shell = source.slice(source.indexOf("export function AppShell("));
-	assert.match(shell, /<SessionsSidebar\s*\/>\s*<FilePathDropZone\b[^>]*>\{children\}<\/FilePathDropZone>/);
+	// Phone pass 2026-11: the drop zone gained the drawer's `inert` prop, so
+	// the two siblings now span several lines — the LAW is still the order.
+	assert.match(shell, /<SessionsSidebar\s*\/>[\s\S]*?<FilePathDropZone\b[^>]*>\s*\{children\}\s*<\/FilePathDropZone>/);
 	assert.doesNotMatch(shell, /<FilePathDropZone\b[^>]*>[\s\S]*<SessionsSidebar/);
 });

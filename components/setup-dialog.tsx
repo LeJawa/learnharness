@@ -457,10 +457,10 @@ function OpenSetupDialog({ onClose, onDone }: SetupDialogProps) {
 				aria-modal="true"
 				aria-label="Set up your models"
 				data-testid="setup-dialog"
-				className="settings-dialog-pop flex max-h-[85vh] w-[640px] max-w-[90vw] flex-col overflow-hidden rounded-md border border-border bg-card shadow-xl"
+				className="settings-dialog-pop flex max-h-[85vh] w-[640px] max-w-[90vw] flex-col overflow-hidden rounded-md border border-border bg-card shadow-xl max-md:h-dvh max-md:max-h-none max-md:w-screen max-md:max-w-none max-md:rounded-none max-md:border-0"
 				onClick={(e) => e.stopPropagation()}
 			>
-				<header className="flex h-15 shrink-0 items-center gap-3 border-b border-border px-5">
+				<header className="flex h-15 shrink-0 items-center gap-3 border-b border-border px-5 max-md:h-[calc(3.75rem+var(--lh-safe-top))] max-md:pt-[var(--lh-safe-top)] max-md:px-4">
 					<h2 className="font-title text-2xl tracking-tight">Set up your models</h2>
 					<Hint label="Close" binding="escape" side="left">
 <button
@@ -485,7 +485,7 @@ function OpenSetupDialog({ onClose, onDone }: SetupDialogProps) {
 				) : stage === "keys" ? (
 					<div className="flex flex-col px-6 py-5">{keysBody}</div>
 				) : (
-					<div className="flex flex-col gap-4 overflow-y-auto px-6 py-5" data-testid="setup-stage-pickers">
+					<div className="flex flex-col gap-4 overflow-y-auto px-6 py-5 max-md:pb-[calc(1.25rem+var(--lh-safe-bottom))]" data-testid="setup-stage-pickers">
 						<p className="text-xs text-muted-foreground">
 							Pick the model for each tier. All three are required before chats can start.
 						</p>
