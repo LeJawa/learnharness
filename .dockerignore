@@ -28,12 +28,12 @@ Thumbs.db
 # Docs & tests (not needed in production)
 docs/
 tests/
-scripts/
 
-# Electron desktop build stuff (server doesn't need these)
-electron/
+# NOTE: electron/ is REQUIRED in the build context — src/server/web-subscriptions.ts
+# imports runtime .cjs modules from it (chatgpt.cjs, subscriptions.cjs, *-ipc.cjs).
+# Only the Electron shell entrypoints are build-only, but they are small and
+# the standalone trace ignores them anyway.
 electron-builder.yml
-*.desktop
 
 # Dev tooling
 *.log

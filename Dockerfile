@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY package.json package-lock.json ./
 RUN npm ci
 
+ENV NEXT_TELEMETRY_DISABLED=1
+
 COPY . .
 RUN npm run build
 
@@ -33,6 +35,10 @@ COPY --from=builder --chown=learnharness:learnharness /build/.next/static ./.nex
 COPY --from=builder --chown=learnharness:learnharness /build/public ./public
 # Prompt assets the server reads from disk at request time
 COPY --from=builder --chown=learnharness:learnharness /build/src ./src
+# Runtime .cjs modules shared with the Electron shell — src/server/web-subscriptions.ts
+# imports ../../electron/{chatgpt,subscriptions,*-ipc}.cjs. Keep the same relative
+# layout in case the standalone trace does not copy them.
+COPY --from=builder --chown=learnharness:learnharness /build/electron ./electron
 
 # Entrypoint: just run the standalone server
 RUN printf '#!/bin/sh\nexec node server.js "$@"\n' > entrypoint.sh && \
@@ -41,6 +47,7 @@ RUN printf '#!/bin/sh\nexec node server.js "$@"\n' > entrypoint.sh && \
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
+ENV NEXT_TELEMETRY_DISABLED=1
 
 # Persistent data directory (bind-mount or volume at runtime)
 RUN mkdir -p /app/data && chown learnharness:learnharness /app/data
