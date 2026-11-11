@@ -172,7 +172,14 @@ export function failedOutputCallIds(messages: readonly LhMessage[]): ReadonlySet
 
 /** The app-wide message id shape (same as the UIMessage-era mint). */
 export function newMessageId(): string {
-	return `msg_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`;
+	return newRecordId("msg");
+}
+
+function newRecordId(prefix: "msg" | "pb"): string {
+	// getRandomValues also works on HTTP origins (e.g. a Tailscale IP).
+	// Preserve the timestamp + eight random hex digits used by existing IDs.
+	const suffix = crypto.getRandomValues(new Uint32Array(1))[0]!.toString(16).padStart(8, "0");
+	return `${prefix}_${Date.now().toString(36)}_${suffix}`;
 }
 
 // ─── constructors (the input-event → native append mapping lives in
@@ -244,7 +251,7 @@ export function newPlanBlockMessage(
 	block: unknown,
 ): LhMarkerMessage {
 	return {
-		id: `pb_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
+		id: newRecordId("pb"),
 		role: "custom",
 		customType: "plan-block",
 		content: "",
